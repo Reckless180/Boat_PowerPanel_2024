@@ -26,12 +26,24 @@
 
 ; ** Definintions **
 .def TEMP = r17             ; Scratch Register
+.def DEBOUNCE_COUNT = r18   ; Debounce count accumulator
 
-.equ BILGE_RLY = PB0
-.equ LIGHT_RLY = PB1
-.equ PWR_LED   = PB2
-.equ BILGE_SW  = PB3
-.equ LIGHT_SW  = PB4
+; ** Constants **
+.equ BILGE_RLY = PB0        ; Bilge Pump Relay (OUTPUT)
+.equ LIGHT_RLY = PB1        ; Light Relay (OUTPUT)
+.equ PWR_LED   = PB2        ; Power LED (OUTPUT)
+.equ BILGE_SW  = PINB3      ; Bilge Pump Switch (INPUT)
+.equ LIGHT_SW  = PINB4      ; Light Switch (INPUT)
+.equ TRUE      = 1          ; Constant for True
+.equ FALSE     = 0          ; Constant for False
+.equ DEBOUNCE_DELAY = 10    ; Debounce count init
+
+; ** SRAM Allocation **
+.DSEG
+BILGE_STATUS: .byte 1       ; Bilge Pump Relay Status (BOOLEAN)
+LIGHT_STATUS: .byte 1       ; Light Relay Status (BOOLEAN)
+PORT_STATUS:  .byte 1       ; PORTB Status
+.CSEG
 
 ; ** Reset vector **
 .org 0x0000
@@ -52,34 +64,67 @@ RESET:
     ; PB4 = LIGHT_SW
     ; PB5 = ~RESET - Tied to +5V
     
-    ldi TEMP, 0b00000111
+    ldi TEMP, $07
     out DDRB, TEMP
     clr TEMP
     out PORTB, TEMP
 
-
+    ; Init variables
+    ldi TEMP, FALSE
+    sts BILGE_STATUS, TEMP
+    sts LIGHT_STATUS, TEMP
+    in TEMP, PORTB
+    sts PORT_STATUS, TEMP
+    ldi DEBOUNCE_COUNT, DEBOUNCE_DELAY
 
 
 ; ** Main loop **
 MAIN:
-    sbi PORTB, BILGE_RLY
-    rcall DEBOUNCE
-    rcall DEBOUNCE
-    rcall DEBOUNCE
-    rcall DEBOUNCE
-    rcall DEBOUNCE
-    rcall DEBOUNCE
-    cbi PORTB, BILGE_RLY
-rcall DEBOUNCE
-    rcall DEBOUNCE
-    rcall DEBOUNCE
-    rcall DEBOUNCE
-    rcall DEBOUNCE
-    rcall DEBOUNCE
+    ; Check Bilge Switch
+    sbis PINB, BILGE_SW
+    rcall BILGE_SW_HANDLER
+    ; Check Light Switch
+    sbis PINB, LIGHT_SW
+    rcall LIGHT_SW_HANDLER
     rjmp MAIN
+
+BILGE_SW_HANDLER:
+    ; Program branches here if bilge switch active
+    ret
+
+LIGHT_SW_HANDLER:
+    ; Program branches here if light switch active
+    ; Soft Debounce
+    LIGHT_DEBOUNCE:
+        push DEBOUNCE_COUNT         ; r18 used in delay loop, save current value
+        rcall DEBOUNCE              ; Wait 5mS
+        pop DEBOUNCE_COUNT          ; Restore r18
+        dec DEBOUNCE_COUNT          ; Continue until debounce delay expired
+        brne LIGHT_DEBOUNCE
+        ldi DEBOUNCE_COUNT, DEBOUNCE_DELAY  ; Re-init counter value
+    lds TEMP, LIGHT_STATUS
+    dec TEMP
+    brlt TURN_LIGHT_ON              ; If lights currently OFF - Turn light ON
+    TURN_LIGHT_OFF:                 ; Otherwise turn lights OFF
+    cbi PORTB, LIGHT_RLY
+    ldi TEMP, FALSE
+    sts LIGHT_STATUS, TEMP
+    rjmp LIGHT_FINAL
+
+    TURN_LIGHT_ON:
+    sbi PORTB, LIGHT_RLY
+    ldi TEMP, TRUE
+    sts LIGHT_STATUS, TEMP
+
+    LIGHT_FINAL:
+    sbis PINB, LIGHT_SW            ; Wait for switch release
+    rjmp LIGHT_FINAL
+
+    ret
 
 
 DEBOUNCE:
+; ** Software Switch Debounce Delay **
 ; Assembly code auto-generated
 ; by utility from Bret Mulvey
 ; Delay 6 000 cycles
